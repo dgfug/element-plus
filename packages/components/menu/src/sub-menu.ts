@@ -1,51 +1,98 @@
 import {
-  defineComponent,
-  computed,
-  ref,
-  provide,
-  inject,
-  getCurrentInstance,
-  watch,
-  onMounted,
-  onBeforeUnmount,
-  withDirectives,
   Fragment,
-  vShow,
+  computed,
+  defineComponent,
+  getCurrentInstance,
   h,
+  inject,
+  onBeforeUnmount,
+  onMounted,
+  provide,
   reactive,
+  ref,
+  vShow,
+  watch,
+  withDirectives,
 } from 'vue'
 import { useTimeoutFn } from '@vueuse/core'
 import ElCollapseTransition from '@element-plus/components/collapse-transition'
-import ElPopper from '@element-plus/components/popper'
-import { buildProp } from '@element-plus/utils/props'
-import { throwError } from '@element-plus/utils/error'
+import ElTooltip from '@element-plus/components/tooltip'
+import {
+  buildProps,
+  iconPropType,
+  isString,
+  throwError,
+} from '@element-plus/utils'
+import { useNamespace } from '@element-plus/hooks'
+import { ArrowDown, ArrowRight } from '@element-plus/icons-vue'
+import { ElIcon } from '@element-plus/components/icon'
 import useMenu from './use-menu'
 import { useMenuCssVar } from './use-menu-css-var'
-import type { Placement } from '@element-plus/components/popper'
 
-import type { ExtractPropTypes, VNodeArrayChildren, CSSProperties } from 'vue'
+import type { Placement } from '@element-plus/components/popper'
+import type { ExtractPropTypes, VNodeArrayChildren } from 'vue'
 import type { MenuProvider, SubMenuProvider } from './types'
 
-export const subMenuProps = {
+export const subMenuProps = buildProps({
+  /**
+   * @description unique identification
+   */
   index: {
     type: String,
     required: true,
   },
-  showTimeout: buildProp({
-    type: Number,
-    default: 300,
-  } as const),
-  hideTimeout: buildProp({
-    type: Number,
-    default: 300,
-  } as const),
+  /**
+   * @description timeout before showing a sub-menu(inherit `show-timeout` of the menu by default.)
+   */
+  showTimeout: Number,
+  /**
+   * @description timeout before hiding a sub-menu(inherit `hide-timeout` of the menu by default.)
+   */
+  hideTimeout: Number,
+  /**
+   * @description custom class name for the popup menu
+   */
   popperClass: String,
+  /**
+   * @description whether the sub-menu is disabled
+   */
   disabled: Boolean,
-  popperAppendToBody: buildProp({
+  /**
+   * @description whether popup menu is teleported to the body
+   */
+  teleported: {
     type: Boolean,
     default: undefined,
-  } as const),
-} as const
+  },
+  /**
+   * @description offset of the popper (overrides the `popper` of menu)
+   */
+  popperOffset: Number,
+  /**
+   * @description Icon when menu are expanded and submenu are closed, `expand-close-icon` and `expand-open-icon` need to be passed together to take effect
+   */
+  expandCloseIcon: {
+    type: iconPropType,
+  },
+  /**
+   * @description Icon when menu are expanded and submenu are opened, `expand-open-icon` and `expand-close-icon` need to be passed together to take effect
+   */
+  expandOpenIcon: {
+    type: iconPropType,
+  },
+  /**
+   * @description Icon when menu are collapsed and submenu are closed, `collapse-close-icon` and `collapse-open-icon` need to be passed together to take effect
+   */
+  collapseCloseIcon: {
+    type: iconPropType,
+  },
+  /**
+   * @description Icon when menu are collapsed and submenu are opened, `collapse-open-icon` and `collapse-close-icon` need to be passed together to take effect
+   */
+  collapseOpenIcon: {
+    type: iconPropType,
+  },
+} as const)
 export type SubMenuProps = ExtractPropTypes<typeof subMenuProps>
 
 const COMPONENT_NAME = 'ElSubMenu'
@@ -55,10 +102,12 @@ export default defineComponent({
 
   setup(props, { slots, expose }) {
     const instance = getCurrentInstance()!
-    const { paddingStyle, indexPath, parentMenu } = useMenu(
+    const { indexPath, parentMenu } = useMenu(
       instance,
       computed(() => props.index)
     )
+    const nsMenu = useNamespace('menu')
+    const nsSubMenu = useNamespace('sub-menu')
 
     // inject
     const rootMenu = inject<MenuProvider>('rootMenu')
@@ -71,38 +120,41 @@ export default defineComponent({
     const subMenus = ref<MenuProvider['subMenus']>({})
 
     let timeout: (() => void) | undefined
-    const currentPlacement = ref<Placement | ''>('')
     const mouseInChild = ref(false)
     const verticalTitleRef = ref<HTMLDivElement>()
-    const vPopper = ref()
+    const vPopper = ref<InstanceType<typeof ElTooltip> | null>(null)
 
     // computed
+    const currentPlacement = computed<Placement>(() =>
+      mode.value === 'horizontal' && isFirstLevel.value
+        ? 'bottom-start'
+        : 'right-start'
+    )
     const subMenuTitleIcon = computed(() => {
       return (mode.value === 'horizontal' && isFirstLevel.value) ||
         (mode.value === 'vertical' && !rootMenu.props.collapse)
-        ? 'el-icon-arrow-down'
-        : 'el-icon-arrow-right'
+        ? props.expandCloseIcon && props.expandOpenIcon
+          ? opened.value
+            ? props.expandOpenIcon
+            : props.expandCloseIcon
+          : ArrowDown
+        : props.collapseCloseIcon && props.collapseOpenIcon
+        ? opened.value
+          ? props.collapseOpenIcon
+          : props.collapseCloseIcon
+        : ArrowRight
     })
     const isFirstLevel = computed(() => {
-      let isFirstLevel = true
-      let parent = instance.parent
-      while (parent && parent.type.name !== 'ElMenu') {
-        if (['ElSubMenu', 'ElMenuItemGroup'].includes(parent.type.name!)) {
-          isFirstLevel = false
-          break
-        } else {
-          parent = parent.parent
-        }
-      }
-      return isFirstLevel
+      return subMenu.level === 0
     })
     const appendToBody = computed(() => {
-      return props.popperAppendToBody === undefined
-        ? isFirstLevel.value
-        : Boolean(props.popperAppendToBody)
+      const value = props.teleported
+      return value === undefined ? isFirstLevel.value : value
     })
     const menuTransitionName = computed(() =>
-      rootMenu.props.collapse ? 'el-zoom-in-left' : 'el-zoom-in-top'
+      rootMenu.props.collapse
+        ? `${nsMenu.namespace.value}-zoom-in-left`
+        : `${nsMenu.namespace.value}-zoom-in-top`
     )
     const fallbackPlacements = computed<Placement[]>(() =>
       mode.value === 'horizontal' && isFirstLevel.value
@@ -116,6 +168,8 @@ export default defineComponent({
           ]
         : [
             'right-start',
+            'right',
+            'right-end',
             'left-start',
             'bottom-start',
             'bottom-end',
@@ -142,9 +196,6 @@ export default defineComponent({
       return isActive
     })
 
-    const backgroundColor = computed(() => rootMenu.props.backgroundColor || '')
-    const activeTextColor = computed(() => rootMenu.props.activeTextColor || '')
-    const textColor = computed(() => rootMenu.props.textColor || '')
     const mode = computed(() => rootMenu.props.mode)
     const item = reactive({
       index: props.index,
@@ -152,29 +203,30 @@ export default defineComponent({
       active,
     })
 
-    const titleStyle = computed<CSSProperties>(() => {
-      if (mode.value !== 'horizontal') {
-        return {
-          color: textColor.value,
-        }
-      }
-      return {
-        borderBottomColor: active.value
-          ? rootMenu.props.activeTextColor
-            ? activeTextColor.value
-            : ''
-          : 'transparent',
-        color: active.value ? activeTextColor.value : textColor.value,
-      }
+    const ulStyle = useMenuCssVar(rootMenu.props, subMenu.level + 1)
+
+    const subMenuPopperOffset = computed(() => {
+      return props.popperOffset ?? rootMenu.props.popperOffset
+    })
+
+    const subMenuPopperClass = computed(() => {
+      return props.popperClass ?? rootMenu.props.popperClass
+    })
+
+    const subMenuShowTimeout = computed(() => {
+      return props.showTimeout ?? rootMenu.props.showTimeout
+    })
+
+    const subMenuHideTimeout = computed(() => {
+      return props.hideTimeout ?? rootMenu.props.hideTimeout
     })
 
     // methods
-    const doDestroy = () => vPopper.value?.doDestroy()
+    const doDestroy = () =>
+      vPopper.value?.popperRef?.popperInstanceRef?.destroy()
 
     const handleCollapseToggle = (value: boolean) => {
-      if (value) {
-        updatePlacement()
-      } else {
+      if (!value) {
         doDestroy()
       }
     }
@@ -197,9 +249,9 @@ export default defineComponent({
 
     const handleMouseenter = (
       event: MouseEvent | FocusEvent,
-      showTimeout = props.showTimeout
+      showTimeout = subMenuShowTimeout.value
     ) => {
-      if (event.type === 'focus' && !event.relatedTarget) {
+      if (event.type === 'focus') {
         return
       }
       if (
@@ -208,15 +260,15 @@ export default defineComponent({
         (!rootMenu.props.collapse && rootMenu.props.mode === 'vertical') ||
         props.disabled
       ) {
+        subMenu.mouseInChild.value = true
         return
       }
-      mouseInChild.value = true
+      subMenu.mouseInChild.value = true
 
       timeout?.()
-      ;({ stop: timeout } = useTimeoutFn(
-        () => rootMenu.openMenu(props.index, indexPath.value),
-        showTimeout
-      ))
+      ;({ stop: timeout } = useTimeoutFn(() => {
+        rootMenu.openMenu(props.index, indexPath.value)
+      }, showTimeout))
 
       if (appendToBody.value) {
         parentMenu.value.vnode.el?.dispatchEvent(new MouseEvent('mouseenter'))
@@ -229,27 +281,21 @@ export default defineComponent({
           rootMenu.props.mode === 'horizontal') ||
         (!rootMenu.props.collapse && rootMenu.props.mode === 'vertical')
       ) {
+        subMenu.mouseInChild.value = false
         return
       }
-      mouseInChild.value = false
       timeout?.()
+      subMenu.mouseInChild.value = false
       ;({ stop: timeout } = useTimeoutFn(
-        () => !mouseInChild.value && rootMenu.closeMenu(props.index),
-        props.hideTimeout
+        () =>
+          !mouseInChild.value &&
+          rootMenu.closeMenu(props.index, indexPath.value),
+        subMenuHideTimeout.value
       ))
 
       if (appendToBody.value && deepDispatch) {
-        if (instance.parent?.type.name === 'ElSubMenu') {
-          subMenu.handleMouseleave?.(true)
-        }
+        subMenu.handleMouseleave?.(true)
       }
-    }
-
-    const updatePlacement = () => {
-      currentPlacement.value =
-        mode.value === 'horizontal' && isFirstLevel.value
-          ? 'bottom-start'
-          : 'right-start'
     }
 
     watch(
@@ -269,6 +315,8 @@ export default defineComponent({
         addSubMenu,
         removeSubMenu,
         handleMouseleave,
+        mouseInChild,
+        level: subMenu.level + 1,
       })
     }
 
@@ -281,7 +329,6 @@ export default defineComponent({
     onMounted(() => {
       rootMenu.addSubMenu(item)
       subMenu.addSubMenu(item)
-      updatePlacement()
     })
 
     onBeforeUnmount(() => {
@@ -292,40 +339,61 @@ export default defineComponent({
     return () => {
       const titleTag: VNodeArrayChildren = [
         slots.title?.(),
-        h('i', {
-          class: ['el-sub-menu__icon-arrow', subMenuTitleIcon.value],
-        }),
+        h(
+          ElIcon,
+          {
+            class: nsSubMenu.e('icon-arrow'),
+            style: {
+              transform: opened.value
+                ? (props.expandCloseIcon && props.expandOpenIcon) ||
+                  (props.collapseCloseIcon &&
+                    props.collapseOpenIcon &&
+                    rootMenu.props.collapse)
+                  ? 'none'
+                  : 'rotateZ(180deg)'
+                : 'none',
+            },
+          },
+          {
+            default: () =>
+              isString(subMenuTitleIcon.value)
+                ? h(instance.appContext.components[subMenuTitleIcon.value])
+                : h(subMenuTitleIcon.value),
+          }
+        ),
       ]
-
-      const ulStyle = useMenuCssVar(rootMenu.props)
 
       // this render function is only used for bypass `Vue`'s compiler caused patching issue.
       // temporarily mark ElPopper as any due to type inconsistency.
       const child = rootMenu.isMenuPopup
         ? h(
             // TODO: correct popper's type.
-            ElPopper as any,
+            ElTooltip as any,
             {
               ref: vPopper,
-              manualMode: true,
               visible: opened.value,
               effect: 'light',
               pure: true,
-              offset: 6,
+              offset: subMenuPopperOffset.value,
               showArrow: false,
-              popperClass: props.popperClass,
+              persistent: true,
+              popperClass: subMenuPopperClass.value,
               placement: currentPlacement.value,
-              appendToBody: appendToBody.value,
+              teleported: appendToBody.value,
               fallbackPlacements: fallbackPlacements.value,
               transition: menuTransitionName.value,
               gpuAcceleration: false,
             },
             {
-              default: () =>
+              content: () =>
                 h(
                   'div',
                   {
-                    class: [`el-menu--${mode.value}`, props.popperClass],
+                    class: [
+                      nsMenu.m(mode.value),
+                      nsMenu.m('popup-container'),
+                      subMenuPopperClass.value,
+                    ],
                     onMouseenter: (evt: MouseEvent) =>
                       handleMouseenter(evt, 100),
                     onMouseleave: () => handleMouseleave(true),
@@ -336,8 +404,9 @@ export default defineComponent({
                       'ul',
                       {
                         class: [
-                          'el-menu el-menu--popup',
-                          `el-menu--popup-${currentPlacement.value}`,
+                          nsMenu.b(),
+                          nsMenu.m('popup'),
+                          nsMenu.m(`popup-${currentPlacement.value}`),
                         ],
                         style: ulStyle.value,
                       },
@@ -345,16 +414,11 @@ export default defineComponent({
                     ),
                   ]
                 ),
-              trigger: () =>
+              default: () =>
                 h(
                   'div',
                   {
-                    class: 'el-sub-menu__title',
-                    style: [
-                      paddingStyle.value,
-                      titleStyle.value,
-                      { backgroundColor: backgroundColor.value },
-                    ],
+                    class: nsSubMenu.e('title'),
                     onClick: handleClick,
                   },
                   titleTag
@@ -365,12 +429,7 @@ export default defineComponent({
             h(
               'div',
               {
-                class: 'el-sub-menu__title',
-                style: [
-                  paddingStyle.value,
-                  titleStyle.value,
-                  { backgroundColor: backgroundColor.value },
-                ],
+                class: nsSubMenu.e('title'),
                 ref: verticalTitleRef,
                 onClick: handleClick,
               },
@@ -386,7 +445,7 @@ export default defineComponent({
                       'ul',
                       {
                         role: 'menu',
-                        class: 'el-menu el-menu--inline',
+                        class: [nsMenu.b(), nsMenu.m('inline')],
                         style: ulStyle.value,
                       },
                       [slots.default?.()]
@@ -401,18 +460,16 @@ export default defineComponent({
         'li',
         {
           class: [
-            'el-sub-menu',
-            {
-              'is-active': active.value,
-              'is-opened': opened.value,
-              'is-disabled': props.disabled,
-            },
+            nsSubMenu.b(),
+            nsSubMenu.is('active', active.value),
+            nsSubMenu.is('opened', opened.value),
+            nsSubMenu.is('disabled', props.disabled),
           ],
           role: 'menuitem',
           ariaHaspopup: true,
           ariaExpanded: opened.value,
           onMouseenter: handleMouseenter,
-          onMouseleave: () => handleMouseleave(true),
+          onMouseleave: () => handleMouseleave(),
           onFocus: handleMouseenter,
         },
         [child]

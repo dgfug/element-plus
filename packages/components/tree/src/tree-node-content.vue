@@ -1,6 +1,8 @@
 <script lang="ts">
-import { h, defineComponent, inject } from 'vue'
+// @ts-nocheck
+import { defineComponent, h, inject, renderSlot } from 'vue'
 
+import { useNamespace } from '@element-plus/hooks'
 import type { ComponentInternalInstance } from 'vue'
 import type { RootTreeType } from './tree.type'
 
@@ -14,6 +16,7 @@ export default defineComponent({
     renderContent: Function,
   },
   setup(props) {
+    const ns = useNamespace('tree')
     const nodeInstance = inject<ComponentInternalInstance>('NodeInstance')
     const tree = inject<RootTreeType>('RootTree')
     return () => {
@@ -21,9 +24,9 @@ export default defineComponent({
       const { data, store } = node
       return props.renderContent
         ? props.renderContent(h, { _self: nodeInstance, node, data, store })
-        : tree.ctx.slots.default
-        ? tree.ctx.slots.default({ node, data })
-        : h('span', { class: 'el-tree-node__label' }, [node.label])
+        : renderSlot(tree.ctx.slots, 'default', { node, data }, () => [
+            h('span', { class: ns.be('node', 'label') }, [node.label]),
+          ])
     }
   },
 })
